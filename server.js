@@ -1,56 +1,55 @@
-"use strict";
+const express = require('express')
+const path = require('path')
+const PORT = process.env.PORT || 5000
 
-require("dotenv").config();
+const querystring = require('querystring')
+const request = require('request')
 
-// ライブラリのインポート。
-const express = require("express");
-const app = express();
-const line_login = require("line-login");
-const session = require("express-session");
-const session_options = {
-    secret: process.env.LINE_LOGIN_CHANNEL_SECRET, // 任意の秘密鍵を設定
-    resave: false,
-    saveUninitialized: false
-}
-app.use(session(session_options));
-
-// 認証の設定。
-const login = new line_login({
-    channel_id: process.env.LINE_LOGIN_CHANNEL_ID,
-    channel_secret: process.env.LINE_LOGIN_CHANNEL_SECRET,
-    callback_url: process.env.LINE_LOGIN_CALLBACK_URL
-});
-
-// サーバー起動設定。
-app.listen(process.env.PORT || 5000, () => {
-    console.log(`server is listening to ${process.env.PORT || 5000}...`);
-});
-
-// 認証フローを開始するためのルーター設定。
-app.get("/auth", async (req, res) => {
-    try {
-        // 認証フローを開始するコード
-        // 何らかのエラーが発生した場合、login.auth() でエラーがスローされる
-        await login.auth();
-
-        // 認証フロー成功時の処理 (エラーが発生しなかった場合)
-        res.json({ success: true });
-    } catch (error) {
-        // エラーメッセージをコンソール上に表示
-        console.error(error.message);
-
-        // エラーが捕捉された場合、エラーメッセージをクライアントに返す
-        res.status(400).json({ error: error.message });
-    }
-});
-
-// ユーザーが承認したあとに実行する処理のためのルーター設定。
-app.get("/callback", login.callback(
-    (req, res, next, token_response) => {
-        // 認証フロー成功時
-        res.json(token_response);
-    },(req, res, next, error) => {
-        // 認証フロー失敗時
-        res.status(400).json(error);
-    }
-));
+express()
+  .use(express.static(path.join(__dirname, 'public')))
+  .disable('etag')
+  .set('views', path.join(__dirname, 'views'))
+  .set('view engine', 'ejs')
+  .get('/', (req, res) => res.render('pages/index'))
+  .get('/login', (req, res) => {
+    const query = querystring.stringify({
+      response_type: 'code',
+      client_id: process.env.LINECORP_PLATFORM_CHANNEL_CHANNELID,
+      redirect_uri: 'https://showtake.herokuapp.com/callback',
+      state: 'hoge', // TODO: must generate random string
+      scope: 'profile',
+    })
+    res.redirect(301, 'https://access.line.me/oauth2/v2.1/authorize?' + query)
+  })
+  .get('/callback', (req, res) => {
+    request
+      .post({
+        url: `https://api.line.me/oauth2/v2.1/token`,
+        form: {
+          grant_type: "authorization_code",
+          code: req.query.code,
+          redirect_uri: 'https://showtake.herokuapp.com/callback',
+          client_id: process.env.LINECORP_PLATFORM_CHANNEL_CHANNELID,
+          client_secret: process.env.LINECORP_PLATFORM_CHANNEL_CHANNELSECRET,
+        }
+      }, (error, response, body) => {
+        if (response.statusCode != 200) {
+          res.send(error)
+          return
+        }
+        request
+          .get({
+            url: 'https://api.line.me/v2/profile',
+            headers: {
+              'Authorization': 'Bearer ' + JSON.parse(body).access_token
+            }
+          }, (error, response, body) => {
+            if (response.statusCode != 200) {
+              res.send(error)
+              return
+            }
+            res.send(body)
+          })
+      })
+  })
+  .listen(PORT, () => console.log(`Listening on ${ PORT }`))
